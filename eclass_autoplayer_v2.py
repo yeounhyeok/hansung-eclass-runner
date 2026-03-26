@@ -100,10 +100,14 @@ def find_courses_from_ubion(page):
         href = a['href']
         if 'course/view.php' in href:
             title = a.get_text().strip()
+            # Skip course ID 46668 (Ethics guideline/Notice only)
+            if 'id=46668' in href:
+                logging.info('Skipping course 46668: %s', title)
+                continue
             full = href if href.startswith('http') else 'https://learn.hansung.ac.kr' + href
             if not any(c['href']==full for c in courses):
                 courses.append({'title': title, 'href': full})
-    logging.info('Discovered %d courses from ubion', len(courses))
+    logging.info('Discovered %d actual courses from ubion', len(courses))
     return courses
 
 
@@ -115,6 +119,10 @@ def find_video_modules_from_course_html(html):
         # Filter: ONLY view.php or viewer.php, EXCLUDE index.php
         if ('/mod/vod/viewer.php' in href) or ('/mod/vod/view.php' in href):
             title = a.get_text().strip() or 'video'
+            # Skip "HSU AI 활용 윤리 지침" related modules
+            if "윤리 지침" in title or "윤리지침" in title:
+                logging.info('Skipping Ethics Guideline module: %s', title)
+                continue
             full = href if href.startswith('http') else 'https://learn.hansung.ac.kr' + href
             parent = a.parent
             surrounding = ' '
@@ -128,7 +136,7 @@ def find_video_modules_from_course_html(html):
                 'context': surrounding,
                 'player_type': 'jwplayer',
                 'has_iframe': True,
-                'notes': 'JWPlayer-based VOD module; inspect iframe/main frame for jwplayer()'
+                'notes': 'JWPlayer-based VOD module'
             })
     # remove duplicates while preserving order
     seen = set()
@@ -151,156 +159,122 @@ def in_availability_window(context_text):
 
 def attempt_play_video(page, max_wait, logdir: Path):
     """
-    Enhanced play attempt that handles JWPlayer instances (common on this LMS) and
-    falls back to HTML5 <video> detection. Returns info with keys: found,duration,watched_seconds,player_type
+    Enhanced play attempt that handles popups/new windows.
+    Returns info with keys: found,duration,watched_seconds,player_type
     """
     info = {'found': False, 'duration': None, 'watched_seconds': 0, 'player_type': None}
     try:
-        # First: try JWPlayer API in main frame and child frames
+        # Listen for popups
+        popup = None
+        def on_popup(p):
+            nonlocal popup
+            popup = p
+            logging.info('Popup detected: %s', p.url)
+        page.on('popup', on_popup)
+
+        # Step 0: Click "동영상 보기"
         try:
-            frames = [page] + list(page.frames)
+            play_btn = page.query_selector('a:has-text("동영상 보기"), button:has-text("동영상 보기")')
+            if play_btn:
+                logging.info('Found "동영상 보기" button, clicking...')
+                # We expect a popup, so we use expect_popup if possible, but the event listener is safer for now
+                play_btn.click()
+                # Wait up to 10s for the popup to actually register
+                for _ in range(10):
+                    if popup: break
+                    time.sleep(1)
+        except Exception as e:
+            logging.info('Clicking "동영상 보기" failed: %s', e)
+
+        # Target frame/page to probe
+        targets = []
+        if popup:
+            try:
+                popup.wait_for_load_state('networkidle', timeout=15000)
+                targets.append(popup)
+            except Exception:
+                logging.info('Popup networkidle timeout (continuing anyway)')
+                targets.append(popup)
+        
+        # If no popup, check if it opened in the same page or if we have iframes
+        if not popup:
+            targets.append(page)
+        
+        for t in targets:
+            # check if target is still valid
+            try:
+                if t.is_closed(): continue
+            except Exception: continue
+
+            frames = [t] + list(t.frames)
             for f in frames:
                 try:
+                    # check if frame is still valid
                     has_jw = f.evaluate('() => (typeof jwplayer !== "undefined")')
                     if has_jw:
                         info['found'] = True
                         info['player_type'] = 'jwplayer'
-                        logging.info('JWPlayer found in a frame')
-                        # attach complete listener and start playback
-                        try:
-                            f.evaluate('''() => {
-                                try {
-                                    window.__jw_complete = false;
-                                    const player = (typeof jwplayer === 'function') ? jwplayer() : jwplayer;
-                                    if (player && player.on) {
-                                        try { player.on('complete', function() { window.__jw_complete = true; }); } catch(e) {}
-                                    }
-                                    if (player && player.play) {
-                                        try { player.play(); } catch(e) {}
-                                    }
-                                } catch(e) {}
-                            }''')
-                        except Exception:
-                            logging.exception('Failed to call jwplayer.play()')
-                        # Poll for completion using jwplayer API
+                        logging.info('JWPlayer found in frame: %s', f.url)
+                        f.evaluate('''() => {
+                            try {
+                                window.__jw_complete = False;
+                                const player = (typeof jwplayer === 'function') ? jwplayer() : jwplayer;
+                                if (player && player.on) {
+                                    player.on('complete', () => { window.__jw_complete = true; });
+                                }
+                                if (player && player.play) player.play();
+                            } catch(e) {}
+                        }''')
+                        
                         start = time.time()
                         while True:
                             try:
-                                done = f.evaluate('() => (window.__jw_complete === true)')
-                                if done:
-                                    logging.info('JWPlayer reported complete')
-                                    break
-                            except Exception:
-                                pass
-                            try:
+                                if f.evaluate('() => window.__jw_complete === true'): break
                                 pos = f.evaluate('() => (typeof jwplayer !== "undefined" && jwplayer().getPosition) ? jwplayer().getPosition() : null')
                                 dur = f.evaluate('() => (typeof jwplayer !== "undefined" && jwplayer().getDuration) ? jwplayer().getDuration() : null')
                                 if pos is not None and dur is not None:
-                                    try:
-                                        pos_f = float(pos)
-                                        dur_f = float(dur)
-                                        info['watched_seconds'] = pos_f
-                                        info['duration'] = dur_f
-                                        logging.info('JW pos/dur %.1f/%.1f', pos_f, dur_f)
-                                        if dur_f>0 and pos_f+1 >= dur_f:
-                                            logging.info('JWPlayer position near duration; treating as complete')
-                                            break
-                                    except Exception:
-                                        pass
-                            except Exception:
-                                pass
-                            if time.time() - start > max_wait:
-                                logging.info('JWPlayer max wait reached (%ds)', max_wait)
-                                break
-                            time.sleep(3)
-                        # save screenshot
-                        try:
-                            f.page.screenshot(path=str(logdir/f'jw_after_{int(time.time())}.png'), full_page=True)
-                        except Exception:
-                            try:
-                                page.screenshot(path=str(logdir/f'jw_after_{int(time.time())}.png'), full_page=True)
-                            except Exception:
-                                pass
+                                    info['watched_seconds'], info['duration'] = float(pos), float(dur)
+                                    logging.info('JW pos/dur %.1f/%.1f', info['watched_seconds'], info['duration'])
+                                    if info['duration'] > 0 and info['watched_seconds'] + 1 >= info['duration']: break
+                            except Exception: pass
+                            if time.time() - start > max_wait: break
+                            time.sleep(5)
+                        
+                        # Note: we don't close the popup immediately to avoid session loss if it handles reporting
+                        time.sleep(2)
                         return info
-                except Exception:
-                    continue
-        except Exception:
-            logging.exception('Error while probing frames for jwplayer')
+                except Exception: continue
 
-        # Fallback: HTML5 video detection (main frame and child frames)
-        video = page.query_selector('video')
-        found_frame = None
-        if not video:
-            for f in page.frames:
-                try:
-                    v = f.query_selector('video')
-                    if v:
-                        video = v
-                        found_frame = f
-                        break
-                except Exception:
-                    continue
-        if not video:
-            logging.info('No video element found')
-            return info
-
-        info['found'] = True
-        info['player_type'] = 'html5'
-        # get duration
-        try:
-            if found_frame:
-                duration = found_frame.evaluate('() => document.querySelector("video").duration')
-            else:
-                duration = page.evaluate('() => document.querySelector("video").duration')
-            if duration and duration>0 and duration==duration:
-                info['duration'] = float(duration)
-            else:
-                info['duration'] = None
-        except Exception:
-            info['duration'] = None
-        # play at 1.0
-        try:
-            if found_frame:
-                found_frame.evaluate('() => { const v = document.querySelector("video"); v.playbackRate = 1.0; v.play(); }')
-            else:
-                page.evaluate('() => { const v = document.querySelector("video"); v.playbackRate = 1.0; v.play(); }')
-        except Exception as e:
-            logging.warning('Play call failed: %s', e)
-        start = time.time()
-        elapsed_watch = 0
-        check_interval = 6
-        while True:
-            if info['duration']:
-                try:
-                    if found_frame:
-                        cur = found_frame.evaluate('() => document.querySelector("video").currentTime')
-                    else:
-                        cur = page.evaluate('() => document.querySelector("video").currentTime')
-                    elapsed_watch = float(cur or 0)
-                    logging.info('Video progress: %.1f / %.1f', elapsed_watch, info['duration'])
-                    if elapsed_watch + 1 >= info['duration']:
-                        break
-                except Exception:
-                    pass
-            if time.time() - start > max_wait:
-                logging.info('Max wait reached (%ds)', max_wait)
-                break
-            # small human-like action
+        # Fallback HTML5
+        for t in targets:
             try:
-                page.mouse.move(20,20)
-            except Exception:
-                pass
-            time.sleep(check_interval)
-        info['watched_seconds'] = elapsed_watch
-        # save screenshot after end
-        ts = int(time.time())
-        try:
-            page.screenshot(path=str(logdir/f'shot_after_{ts}.png'), full_page=True)
-        except Exception:
-            pass
+                if t.is_closed(): continue
+                video = t.query_selector('video')
+                found_f = t
+                if not video:
+                    for f in t.frames:
+                        v = f.query_selector('video')
+                        if v: video, found_f = v, f; break
+                
+                if video:
+                    info['found'], info['player_type'] = True, 'html5'
+                    dur = found_f.evaluate('() => document.querySelector("video").duration')
+                    info['duration'] = float(dur) if dur else None
+                    found_f.evaluate('() => document.querySelector("video").play()')
+                    start = time.time()
+                    while True:
+                        cur = found_f.evaluate('() => document.querySelector("video").currentTime')
+                        info['watched_seconds'] = float(cur or 0)
+                        logging.info('HTML5 pos/dur %.1f/%s', info['watched_seconds'], info['duration'])
+                        if info['duration'] and info['watched_seconds'] + 1 >= info['duration']: break
+                        if time.time() - start > max_wait: break
+                        time.sleep(5)
+                    return info
+            except Exception: continue
+
         return info
     except Exception as e:
-        logging.exception('Error during attempt_play_video: %s', e)
+        logging.exception('Error in attempt_play_video: %s', e)
         return info
 
 
@@ -308,6 +282,22 @@ def dump_frame_diagnostics(page):
     try:
         logging.info('PAGE URL: %s', page.url)
         logging.info('PAGE TITLE: %s', page.title())
+        
+        # List all visible buttons and links to find "Learning" or "Play" buttons
+        try:
+            interactables = page.query_selector_all('a, button, input[type="button"], input[type="submit"]')
+            logging.info('INTERACTABLES: %d', len(interactables))
+            for idx, el in enumerate(interactables):
+                try:
+                    text = el.inner_text().strip()
+                    tag = el.evaluate('el => el.tagName')
+                    if text:
+                        logging.info('INTERACTABLE[%d] %s: "%s"', idx, tag, text)
+                except Exception:
+                    continue
+        except Exception as e:
+            logging.info('Interactable scan failed: %s', e)
+
         try:
             iframes = page.query_selector_all('iframe')
             logging.info('IFRAMES: %d', len(iframes))
@@ -319,6 +309,7 @@ def dump_frame_diagnostics(page):
                 logging.info('IFRAME[%d] src=%s', idx, src)
         except Exception as e:
             logging.info('IFRAME scan failed: %s', e)
+        
         for idx, f in enumerate([page] + list(page.frames)):
             try:
                 has_jw = f.evaluate('() => typeof jwplayer !== "undefined"')
