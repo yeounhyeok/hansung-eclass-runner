@@ -304,6 +304,35 @@ def attempt_play_video(page, max_wait, logdir: Path):
         return info
 
 
+def dump_frame_diagnostics(page):
+    try:
+        logging.info('PAGE URL: %s', page.url)
+        logging.info('PAGE TITLE: %s', page.title())
+        try:
+            iframes = page.query_selector_all('iframe')
+            logging.info('IFRAMES: %d', len(iframes))
+            for idx, frame_el in enumerate(iframes):
+                try:
+                    src = frame_el.get_attribute('src')
+                except Exception:
+                    src = None
+                logging.info('IFRAME[%d] src=%s', idx, src)
+        except Exception as e:
+            logging.info('IFRAME scan failed: %s', e)
+        for idx, f in enumerate([page] + list(page.frames)):
+            try:
+                has_jw = f.evaluate('() => typeof jwplayer !== "undefined"')
+            except Exception:
+                has_jw = False
+            try:
+                url = f.url
+            except Exception:
+                url = 'unknown'
+            logging.info('FRAME[%d] url=%s jwplayer=%s', idx, url, has_jw)
+    except Exception as e:
+        logging.exception('dump_frame_diagnostics failed: %s', e)
+
+
 def click_end_modal(page):
     # attempt to click common modal/confirm buttons with Korean text
     try:
@@ -393,6 +422,7 @@ def main():
     parser.add_argument('--headless', action='store_true', help='run headless')
     parser.add_argument('--visible', action='store_true', help='force visible browser window')
     parser.add_argument('--debug-first', action='store_true', help='stop after opening first module for inspection')
+    parser.add_argument('--dump-frames', action='store_true', help='dump frame and jwplayer diagnostics for current module')
     parser.add_argument('--cron-auto', action='store_true', help='allow cron add/remove')
     parser.add_argument('--max-wait', type=int, default=7200)
     parser.add_argument('--log-dir', default='/home/ubuntu/.openclaw/workspace/eclass_run_logs')
@@ -454,6 +484,8 @@ def main():
                     logging.info('Visiting module %s', m['href'])
                     page.goto(m['href'])
                     page.wait_for_load_state('networkidle')
+                    if args.dump_frames:
+                        dump_frame_diagnostics(page)
                     if args.debug_first:
                         logging.info('Debug-first enabled; stopping before playback')
                         page.pause()
