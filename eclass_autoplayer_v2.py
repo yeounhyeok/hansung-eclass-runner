@@ -95,6 +95,7 @@ def find_courses_from_ubion(page):
     html = page.content()
     soup = BeautifulSoup(html, 'html.parser')
     courses = []
+
     # look for table rows with links to course/view.php
     for a in soup.find_all('a', href=True):
         href = a['href']
@@ -107,7 +108,7 @@ def find_courses_from_ubion(page):
             full = href if href.startswith('http') else 'https://learn.hansung.ac.kr' + href
             if not any(c['href']==full for c in courses):
                 courses.append({'title': title, 'href': full})
-    logging.info('Discovered %d actual courses from ubion', len(courses))
+    logging.info('Discovered %d courses from ubion', len(courses))
     return courses
 
 
@@ -159,8 +160,7 @@ def in_availability_window(context_text):
 
 def attempt_play_video(page, max_wait, logdir: Path):
     """
-    Enhanced play attempt that handles popups/new windows.
-    Returns info with keys: found,duration,watched_seconds,player_type
+    Enhanced play attempt that handles popups and simulates real clicks.
     """
     info = {'found': False, 'duration': None, 'watched_seconds': 0, 'player_type': None}
     try:
@@ -174,101 +174,147 @@ def attempt_play_video(page, max_wait, logdir: Path):
 
         # Step 0: Click "동영상 보기"
         try:
-            play_btn = page.query_selector('a:has-text("동영상 보기"), button:has-text("동영상 보기")')
+            # RELOAD REMOVED per user request
+            # Find the button precisely
+            play_btn = page.wait_for_selector('a:has-text("동영상 보기"), button:has-text("동영상 보기"), .btn-primary:has-text("동영상 보기")', timeout=15000)
             if play_btn:
-                logging.info('Found "동영상 보기" button, clicking...')
-                # We expect a popup, so we use expect_popup if possible, but the event listener is safer for now
-                play_btn.click()
-                # Wait up to 10s for the popup to actually register
-                for _ in range(10):
+                logging.info('Found "동영상 보기" button, scrolling and clicking...')
+                play_btn.scroll_into_view_if_needed()
+                
+                # IMPORTANT: In visible mode, some sites block programmatic clicks
+                # Try clicking at the actual coordinates of the button
+                box = play_btn.bounding_box()
+                if box:
+                    logging.info('Clicking button at coordinates: %f, %f', box['x'] + box['width']/2, box['y'] + box['height']/2)
+                    page.mouse.click(box['x'] + box['width']/2, box['y'] + box['height']/2)
+                else:
+                    play_btn.click(delay=500)
+                
+                # Double-check with JS if popup still hasn't appeared
+                time.sleep(3)
+                if not popup:
+                    logging.info('Popup still missing, trying force window.open or JS click...')
+                    page.evaluate('btn => btn.click()', play_btn)
+
+                for _ in range(15): # Wait for popup
                     if popup: break
                     time.sleep(1)
         except Exception as e:
             logging.info('Clicking "동영상 보기" failed: %s', e)
 
-        # Target frame/page to probe
-        targets = []
-        if popup:
-            try:
-                popup.wait_for_load_state('networkidle', timeout=15000)
-                targets.append(popup)
-            except Exception:
-                logging.info('Popup networkidle timeout (continuing anyway)')
-                targets.append(popup)
-        
-        # If no popup, check if it opened in the same page or if we have iframes
         if not popup:
-            targets.append(page)
+            logging.warning('No popup appeared after clicking "동영상 보기"')
+            return info
+
+        # NEW: Check for "수강 기록이 있습니다. 이어서 보시겠습니까?" modal in popup
+        try:
+            popup.wait_for_load_state('load', timeout=10000)
+            resume_btn = popup.query_selector('button:has-text("예"), button:has-text("확인"), .modal-footer button.btn-primary')
+            if resume_btn:
+                logging.info('Detected "Resume playback" modal in popup, clicking YES/OK')
+                resume_btn.click()
+                time.sleep(2)
+        except Exception:
+            pass
+
+        # Wait for popup to settle and focus it
+        try:
+            popup.wait_for_load_state('load', timeout=15000)
+            popup.bring_to_front()
+            logging.info('Popup focused (bring_to_front)')
+            
+            # Additional check for resume modal in popup with retry
+            for _ in range(5):
+                resume_btn = popup.query_selector('button:has-text("예"), button:has-text("확인"), .modal-footer button.btn-primary')
+                if resume_btn:
+                    logging.info('Detected "Resume playback" modal in popup, clicking YES/OK')
+                    resume_btn.click()
+                    time.sleep(2)
+                    break
+                time.sleep(2)
+        except Exception:
+            pass
         
-        for t in targets:
-            # check if target is still valid
-            try:
-                if t.is_closed(): continue
-            except Exception: continue
+        # Human-like interaction: Click center of popup to trigger play
+        try:
+            # Wait for some content to ensure it's ready for clicks
+            popup.wait_for_timeout(3000)
+            viewport = popup.viewport_size or {'width': 1280, 'height': 800}
+            cx, cy = viewport['width'] // 2, viewport['height'] // 2
+            logging.info('Simulating human click at center (%d, %d) to trigger playback', cx, cy)
+            popup.mouse.click(cx, cy)
+            time.sleep(2)
+        except Exception as e:
+            logging.warning('Center click failed: %s', e)
 
-            frames = [t] + list(t.frames)
-            for f in frames:
-                try:
-                    # check if frame is still valid
-                    has_jw = f.evaluate('() => (typeof jwplayer !== "undefined")')
-                    if has_jw:
-                        info['found'] = True
-                        info['player_type'] = 'jwplayer'
-                        logging.info('JWPlayer found in frame: %s', f.url)
-                        f.evaluate('''() => {
-                            try {
-                                window.__jw_complete = False;
-                                const player = (typeof jwplayer === 'function') ? jwplayer() : jwplayer;
-                                if (player && player.on) {
-                                    player.on('complete', () => { window.__jw_complete = true; });
-                                }
-                                if (player && player.play) player.play();
-                            } catch(e) {}
-                        }''')
-                        
-                        start = time.time()
-                        while True:
-                            try:
-                                if f.evaluate('() => window.__jw_complete === true'): break
-                                pos = f.evaluate('() => (typeof jwplayer !== "undefined" && jwplayer().getPosition) ? jwplayer().getPosition() : null')
-                                dur = f.evaluate('() => (typeof jwplayer !== "undefined" && jwplayer().getDuration) ? jwplayer().getDuration() : null')
-                                if pos is not None and dur is not None:
-                                    info['watched_seconds'], info['duration'] = float(pos), float(dur)
-                                    logging.info('JW pos/dur %.1f/%.1f', info['watched_seconds'], info['duration'])
-                                    if info['duration'] > 0 and info['watched_seconds'] + 1 >= info['duration']: break
-                            except Exception: pass
-                            if time.time() - start > max_wait: break
-                            time.sleep(5)
-                        
-                        # Note: we don't close the popup immediately to avoid session loss if it handles reporting
-                        time.sleep(2)
-                        return info
-                except Exception: continue
-
-        # Fallback HTML5
-        for t in targets:
+        # Target frame to probe for JWPlayer
+        frames = [popup] + list(popup.frames)
+        for f in frames:
             try:
-                if t.is_closed(): continue
-                video = t.query_selector('video')
-                found_f = t
-                if not video:
-                    for f in t.frames:
-                        v = f.query_selector('video')
-                        if v: video, found_f = v, f; break
-                
-                if video:
-                    info['found'], info['player_type'] = True, 'html5'
-                    dur = found_f.evaluate('() => document.querySelector("video").duration')
-                    info['duration'] = float(dur) if dur else None
-                    found_f.evaluate('() => document.querySelector("video").play()')
+                if f.evaluate('() => (typeof jwplayer !== "undefined")'):
+                    info['found'] = True
+                    info['player_type'] = 'jwplayer'
+                    logging.info('JWPlayer found in frame: %s', f.url)
+                    
+                    # Force play via API as well, just in case click wasn't enough
+                    f.evaluate('''() => {
+                        try {
+                            window.__jw_complete = false;
+                            const player = (typeof jwplayer === 'function') ? jwplayer() : jwplayer;
+                            if (player) {
+                                if (player.on) player.on('complete', () => { window.__jw_complete = true; });
+                                
+                                // Step 1: Human-like Delay before initial play
+                                setTimeout(() => {
+                                    if (player.play) player.play();
+                                }, 5000); // 5s delay after popup
+                            }
+                        } catch(e) {}
+                    }''')
+                    
                     start = time.time()
                     while True:
-                        cur = found_f.evaluate('() => document.querySelector("video").currentTime')
-                        info['watched_seconds'] = float(cur or 0)
-                        logging.info('HTML5 pos/dur %.1f/%s', info['watched_seconds'], info['duration'])
-                        if info['duration'] and info['watched_seconds'] + 1 >= info['duration']: break
+                        try:
+                            if f.evaluate('() => window.__jw_complete === true'): break
+                            pos = f.evaluate('() => (typeof jwplayer !== "undefined" && jwplayer().getPosition) ? jwplayer().getPosition() : null')
+                            dur = f.evaluate('() => (typeof jwplayer !== "undefined" && jwplayer().getDuration) ? jwplayer().getDuration() : null')
+                            if pos is not None and dur is not None:
+                                info['watched_seconds'], info['duration'] = float(pos), float(dur)
+                                logging.info('JW pos/dur %.1f/%.1f', info['watched_seconds'], info['duration'])
+                                
+                                # Step 2: HUMAN-LIKE SEEK (JUMP TO END)
+                                if not info.get('_human_key_seek_done') and info['duration'] > 0:
+                                    # Wait a bit more for player stability
+                                    time.sleep(5)
+                                    logging.info('Performing SEEK TO END via API...')
+                                    f.evaluate('(dur) => { try { jwplayer().seek(dur - 2); } catch(e) {} }', info['duration'])
+                                    info['_human_key_seek_done'] = True
+                                
+                                # Step 3: Watch UNTIL ACTUAL END and then CLICK EXIT COORDINATES
+                                if info['duration'] > 0 and (info['watched_seconds'] + 1 >= info['duration']):
+                                    logging.info('DEBUG: Video reached end. Performing HUMAN-LIKE EXIT CLICK (TOP-RIGHT)...')
+                                    # Search for "종료" or "학습종료" button specifically
+                                    try:
+                                        # Force click TOP-RIGHT area (Hansung Ubion standard X button location)
+                                        viewport = popup.viewport_size or {'width': 1280, 'height': 800}
+                                        # Click near top-right corner (approx 30-50px from edges)
+                                        tx, ty = viewport['width'] - 40, 40
+                                        logging.info(f'Clicking TOP-RIGHT exit button: ({tx}, {ty})')
+                                        popup.mouse.click(tx, ty)
+                                        time.sleep(10)
+                                    except Exception as e:
+                                        logging.warning(f'Human exit click failed: {e}')
+                                    break
+
+                            if info['duration'] > 0 and info['watched_seconds'] + 1 >= info['duration']: break
+                        except Exception: pass
                         if time.time() - start > max_wait: break
                         time.sleep(5)
+                    
+                    try:
+                        popup.close()
+                    except Exception:
+                        pass
                     return info
             except Exception: continue
 
@@ -416,7 +462,7 @@ def main():
     parser.add_argument('--dump-frames', action='store_true', help='dump frame and jwplayer diagnostics for current module')
     parser.add_argument('--cron-auto', action='store_true', help='allow cron add/remove')
     parser.add_argument('--max-wait', type=int, default=7200)
-    parser.add_argument('--log-dir', default='/home/ubuntu/.openclaw/workspace/eclass_run_logs')
+    parser.add_argument('--log-dir', default='./eclass_run_logs')
     parser.add_argument('--limit-courses', type=int, default=0)
     parser.add_argument('--resume-course', type=str, default=None)
     parser.add_argument('--keep-open', action='store_true', help='keep browser open at end')
@@ -436,7 +482,11 @@ def main():
     with sync_playwright() as p:
         # Use a realistic browser context: set user agent, referer/origin headers, and keep HTTPS checks
         ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Safari/537.36'
-        browser_args = dict(headless=(False if args.visible else args.headless), slow_mo=(150 if args.visible else 0))
+        browser_args = dict(
+            headless=(False if args.visible else args.headless), 
+            slow_mo=(150 if args.visible else 0),
+            args=['--mute-audio']  # Mute audio at the browser level
+        )
         browser = p.chromium.launch(**browser_args)
         context = browser.new_context(user_agent=ua, locale='ko-KR', viewport={'width':1280,'height':800})
         # Extra headers help replicate a real browser environment (referer/origin are important for entitlements)
