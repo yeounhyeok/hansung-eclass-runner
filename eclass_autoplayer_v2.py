@@ -46,15 +46,21 @@ KST = timezone(timedelta(hours=9))
 
 # env loader
 def load_env_if_present():
-    for env_path in [Path('/home/ubuntu/.openclaw/.env'), Path('/home/ubuntu/.openclaw/workspace/.env')]:
+    candidate_paths = [
+        Path.cwd() / '.env',
+        Path(__file__).resolve().parent / '.env',
+        Path('/home/ubuntu/.openclaw/.env'),
+        Path('/home/ubuntu/.openclaw/workspace/.env'),
+    ]
+    for env_path in candidate_paths:
         if env_path.exists():
             logging.info('Loading env from %s', env_path)
-            for line in env_path.read_text().splitlines():
-                line=line.strip()
+            for line in env_path.read_text(encoding='utf-8').splitlines():
+                line = line.strip()
                 if not line or line.startswith('#') or '=' not in line:
                     continue
-                k,v=line.split('=',1)
-                v=v.strip().strip('"').strip("'")
+                k, v = line.split('=', 1)
+                v = v.strip().strip('"').strip("'")
                 os.environ.setdefault(k.strip(), v)
 
 
