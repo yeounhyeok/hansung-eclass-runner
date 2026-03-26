@@ -339,6 +339,22 @@ def attendance_count_from_course_page(page):
         return 0
 
 
+def parse_attendance_window_from_context(context_text):
+    m = re.search(r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s*~\s*(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})', context_text)
+    if not m:
+        return None
+    try:
+        start = datetime.strptime(m.group(1), '%Y-%m-%d %H:%M:%S').replace(tzinfo=KST)
+        end = datetime.strptime(m.group(2), '%Y-%m-%d %H:%M:%S').replace(tzinfo=KST)
+        return start, end
+    except Exception:
+        return None
+
+
+def same_attendance_checkpoint(before_att, after_att):
+    return after_att > before_att
+
+
 def add_cron_job(cmd, run_dt: datetime, marker: str):
     # build cron time
     m = run_dt
@@ -424,35 +440,36 @@ def main():
                 # filter by availability window
                 available = [m for m in modules if in_availability_window(m.get('context',''))]
                 logging.info('%d modules within availability window', len(available))
+                completed_modules = set()
                 for m in available:
+                    if m['href'] in completed_modules:
+                        continue
+                    completed_modules.add(m['href'])
                     logging.info('Visiting module %s', m['href'])
                     page.goto(m['href'])
                     page.wait_for_load_state('networkidle')
                     info = attempt_play_video(page, max_wait=args.max_wait, logdir=logdir)
-                    logging.info('Played? %s duration=%s watched=%.1f', info['found'], info['duration'], info['watched_seconds'])
-                    # click end modal if exists
+                    logging.info('Played? %s player=%s duration=%s watched=%.1f', info['found'], info.get('player_type'), info['duration'], info['watched_seconds'])
                     clicked = click_end_modal(page)
                     logging.info('End modal clicked: %s', clicked)
-                    # after playback, return to course page
+
                     page.goto(course['href'])
                     page.wait_for_load_state('networkidle')
                     after_att = attendance_count_from_course_page(page)
                     logging.info('Attendance after: %d', after_att)
-                    if after_att > before_att:
+                    if same_attendance_checkpoint(before_att, after_att):
                         logging.info('Attendance increment detected')
                         before_att = after_att
-                        # continue to next module
                         time.sleep(2)
                         continue
-                    else:
-                        logging.info('No attendance increment; scheduling retry')
-                        overall_ok = False
-                        if args.cron_auto:
-                            # schedule one-shot cron at now + 3 minutes
-                            run_dt = datetime.now(KST) + timedelta(minutes=3)
-                            marker = f'eclass_retry_{int(time.time())}'
-                            cmd = f'python3 {shlex.quote(str(Path(__file__).resolve()))} --resume-course {shlex.quote(m["href"])} --headless'
-                            add_cron_job(cmd, run_dt, marker)
+
+                    logging.info('No attendance increment; scheduling retry')
+                    overall_ok = False
+                    if args.cron_auto:
+                        run_dt = datetime.now(KST) + timedelta(minutes=3)
+                        marker = f'eclass_retry_{int(time.time())}'
+                        cmd = f'python3 {shlex.quote(str(Path(__file__).resolve()))} --resume-course {shlex.quote(m["href"])} --headless'
+                        add_cron_job(cmd, run_dt, marker)
                 # finished modules for this course
             # if overall_ok then remove any eclass_retry markers
             if args.cron_auto and overall_ok:
