@@ -484,12 +484,15 @@ def main():
                     logging.info('Visiting module %s', m['href'])
                     page.goto(m['href'])
                     page.wait_for_load_state('networkidle')
-                    if args.dump_frames:
-                        dump_frame_diagnostics(page)
+                    
+                    # Force diagnostics and stop immediately if debug_first
+                    dump_frame_diagnostics(page)
+                    
                     if args.debug_first:
                         logging.info('Debug-first enabled; stopping before playback')
                         page.pause()
                         return
+                        
                     info = attempt_play_video(page, max_wait=args.max_wait, logdir=logdir)
                     logging.info('Played? %s player=%s duration=%s watched=%.1f', info['found'], info.get('player_type'), info['duration'], info['watched_seconds'])
                     clicked = click_end_modal(page)
