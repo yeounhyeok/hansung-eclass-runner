@@ -391,6 +391,8 @@ def remove_cron_by_marker(marker: str):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--headless', action='store_true', help='run headless')
+    parser.add_argument('--visible', action='store_true', help='force visible browser window')
+    parser.add_argument('--debug-first', action='store_true', help='stop after opening first module for inspection')
     parser.add_argument('--cron-auto', action='store_true', help='allow cron add/remove')
     parser.add_argument('--max-wait', type=int, default=7200)
     parser.add_argument('--log-dir', default='/home/ubuntu/.openclaw/workspace/eclass_run_logs')
@@ -413,7 +415,7 @@ def main():
     with sync_playwright() as p:
         # Use a realistic browser context: set user agent, referer/origin headers, and keep HTTPS checks
         ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Safari/537.36'
-        browser_args = dict(headless=args.headless)
+        browser_args = dict(headless=(False if args.visible else args.headless), slow_mo=(150 if args.visible else 0))
         browser = p.chromium.launch(**browser_args)
         context = browser.new_context(user_agent=ua, locale='ko-KR', viewport={'width':1280,'height':800})
         # Extra headers help replicate a real browser environment (referer/origin are important for entitlements)
@@ -452,6 +454,10 @@ def main():
                     logging.info('Visiting module %s', m['href'])
                     page.goto(m['href'])
                     page.wait_for_load_state('networkidle')
+                    if args.debug_first:
+                        logging.info('Debug-first enabled; stopping before playback')
+                        page.pause()
+                        return
                     info = attempt_play_video(page, max_wait=args.max_wait, logdir=logdir)
                     logging.info('Played? %s player=%s duration=%s watched=%.1f', info['found'], info.get('player_type'), info['duration'], info['watched_seconds'])
                     clicked = click_end_modal(page)
