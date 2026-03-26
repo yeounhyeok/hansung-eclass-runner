@@ -112,8 +112,8 @@ def find_video_modules_from_course_html(html):
     modules = []
     for a in soup.find_all('a', href=True):
         href = a['href']
-        # prefer various VOD link patterns: viewer.php, view.php, index.php under mod/vod
-        if ('/mod/vod/viewer.php' in href) or ('/mod/vod/view.php' in href) or ('/mod/vod/index.php' in href) or ('/mod/vod/' in href and ('viewer.php' in href or 'view.php' in href or 'index.php' in href)):
+        # Filter: ONLY view.php or viewer.php, EXCLUDE index.php
+        if ('/mod/vod/viewer.php' in href) or ('/mod/vod/view.php' in href):
             title = a.get_text().strip() or 'video'
             full = href if href.startswith('http') else 'https://learn.hansung.ac.kr' + href
             parent = a.parent
