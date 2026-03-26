@@ -13,6 +13,7 @@ PC용 한성 e-class 자동수강 작업 폴더.
 - 서버 headless/headful 실패 → 로컬 PC에서 실행
 - cron/재시도 자동화는 일단 제외
 - 브라우저는 `headless=False`로 띄우는 형태로 정리
+- 이 강좌의 VOD는 `JWPlayer` 기반으로 취급
 
 
 ## Requirements

@@ -116,14 +116,20 @@ def find_video_modules_from_course_html(html):
         if ('/mod/vod/viewer.php' in href) or ('/mod/vod/view.php' in href) or ('/mod/vod/index.php' in href) or ('/mod/vod/' in href and ('viewer.php' in href or 'view.php' in href or 'index.php' in href)):
             title = a.get_text().strip() or 'video'
             full = href if href.startswith('http') else 'https://learn.hansung.ac.kr' + href
-            # try to capture surrounding text to find date range
             parent = a.parent
             surrounding = ' '
             try:
                 surrounding = parent.get_text(separator=' ', strip=True)
             except Exception:
                 surrounding = a.get_text()
-            modules.append({'title': title, 'href': full, 'context': surrounding})
+            modules.append({
+                'title': title,
+                'href': full,
+                'context': surrounding,
+                'player_type': 'jwplayer',
+                'has_iframe': True,
+                'notes': 'JWPlayer-based VOD module; inspect iframe/main frame for jwplayer()'
+            })
     # remove duplicates while preserving order
     seen = set()
     uniq = []
