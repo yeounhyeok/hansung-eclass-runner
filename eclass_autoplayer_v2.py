@@ -396,6 +396,8 @@ def main():
     parser.add_argument('--log-dir', default='/home/ubuntu/.openclaw/workspace/eclass_run_logs')
     parser.add_argument('--limit-courses', type=int, default=0)
     parser.add_argument('--resume-course', type=str, default=None)
+    parser.add_argument('--keep-open', action='store_true', help='keep browser open at end')
+    parser.add_argument('--single-course', action='store_true', help='only process first course')
     args = parser.parse_args()
 
     load_env_if_present()
@@ -424,6 +426,8 @@ def main():
                 courses = [{'title':'resume','href':args.resume_course}]
             else:
                 courses = find_courses_from_ubion(page)
+            if args.single_course and courses:
+                courses = courses[:1]
             if args.limit_courses>0:
                 courses = courses[:args.limit_courses]
 
@@ -488,8 +492,9 @@ def main():
             logging.exception('Fatal error: %s', e)
         finally:
             try:
-                context.close()
-                browser.close()
+                if not args.keep_open:
+                    context.close()
+                    browser.close()
             except Exception:
                 pass
 
