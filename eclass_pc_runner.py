@@ -16,7 +16,7 @@ SCRIPT = BASE / 'eclass_autoplayer_v2.py'
 
 def main():
     os.chdir(BASE)
-    sys.argv = [str(SCRIPT), '--visible', '--keep-open', '--single-course']
+    sys.argv = [str(SCRIPT), '--visible', '--keep-open']
     runpy.run_path(str(SCRIPT), run_name='__main__')
 
 

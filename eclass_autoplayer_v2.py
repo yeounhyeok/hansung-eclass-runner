@@ -202,14 +202,14 @@ def attempt_play_video(page, max_wait, logdir: Path):
                     play_btn.click(delay=500)
                 
                 # Double-check with JS if popup still hasn't appeared
-                time.sleep(3)
+                time.sleep(1)
                 if not popup:
                     logging.info('Popup still missing, trying force window.open or JS click...')
                     page.evaluate('btn => btn.click()', play_btn)
 
-                for _ in range(15): # Wait for popup
+                for _ in range(10): # Wait for popup
                     if popup: break
-                    time.sleep(1)
+                    time.sleep(0.5)
         except Exception as e:
             logging.info('Clicking "동영상 보기" failed: %s', e)
 
@@ -249,7 +249,7 @@ def attempt_play_video(page, max_wait, logdir: Path):
         # Human-like interaction: Click center of popup to trigger play
         try:
             # Wait for some content to ensure it's ready for clicks
-            popup.wait_for_timeout(3000)
+            popup.wait_for_timeout(1200)
             viewport = popup.viewport_size or {'width': 1280, 'height': 800}
             cx, cy = viewport['width'] // 2, viewport['height'] // 2
             logging.info('Simulating human click at center (%d, %d) to trigger playback', cx, cy)
@@ -275,10 +275,10 @@ def attempt_play_video(page, max_wait, logdir: Path):
                             if (player) {
                                 if (player.on) player.on('complete', () => { window.__jw_complete = true; });
                                 
-                                // Step 1: Human-like Delay before initial play
+                                // Step 1: Reduced delay before initial play
                                 setTimeout(() => {
                                     if (player.play) player.play();
-                                }, 5000); // 5s delay after popup
+                                }, 1500);
                             }
                         } catch(e) {}
                     }''')
