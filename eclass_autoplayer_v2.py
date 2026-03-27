@@ -633,19 +633,8 @@ def main():
                     })
                 success_count = len(course_success)
                 failed_count = len(course_failed)
-                detail_parts = []
-                for item in course_success:
-                    week = item.get('week')
-                    status = item.get('status')
-                    if week is not None:
-                        detail_parts.append(f'W{week} ✅({status})')
-                for item in course_failed:
-                    week = item.get('week')
-                    if week is not None:
-                        detail_parts.append(f'W{week} ❌')
-                detail = ', '.join(detail_parts) if detail_parts else '열린 주차 없음'
-                logging.info('🏁 COURSE END | %s', course_name)
-                logging.info('📘 %s | 성공 %d | 실패 %d | %s', course_name, success_count, failed_count, detail)
+                course_mark = '❌' if failed_count > 0 else '✅'
+                logging.info('🏁 COURSE END | %s | %s', course_name, course_mark)
                 course_summaries.append({
                     'course': course_name,
                     'success': course_success,
@@ -655,32 +644,21 @@ def main():
 
             logging.info('')
             logging.info('🎯 ========= FINAL ATTENDANCE DASHBOARD =========')
-            logging.info('📚 과목명 | ✅ 성공 | ❌ 실패 | 상세')
-            logging.info('─' * 110)
+            logging.info('📚 과목명 | 상태')
+            logging.info('─' * 80)
             for summary in course_summaries:
-                success_count = len(summary['success'])
                 failed_count = len(summary['failed'])
-                detail_parts = []
-                for item in summary['success']:
-                    week = item.get('week')
-                    status = item.get('status')
-                    if week is not None:
-                        detail_parts.append(f'W{week}✅({status})')
-                for item in summary['failed']:
-                    week = item.get('week')
-                    if week is not None:
-                        detail_parts.append(f'W{week}❌')
-                detail = ', '.join(detail_parts) if detail_parts else '열린 주차 없음'
-                logging.info('📘 %s | ✅ %d | ❌ %d | %s', summary['course'], success_count, failed_count, detail)
+                course_mark = '❌' if failed_count > 0 else '✅'
+                logging.info('📘 %s | %s', summary['course'], course_mark)
 
             if unresolved_modules:
                 logging.warning('')
-                logging.warning('🚨 ========= FINAL UNRESOLVED MODULES =========')
+                logging.warning('🚨 미반영 과목/주차 있음')
                 for item in unresolved_modules:
-                    logging.warning('❌ %s | week=%s | title=%s | href=%s', item['course'], item['week'], item['title'], item['href'])
+                    logging.warning('❌ %s | week=%s | title=%s', item['course'], item['week'], item['title'])
             else:
                 logging.info('')
-                logging.info('🎉 모든 처리 대상 모듈이 출석으로 확인되었습니다.')
+                logging.info('🎉 미반영 과목 없음')
 
             # if overall_ok then remove any eclass_retry markers
             if args.cron_auto and overall_ok:
