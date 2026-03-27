@@ -1,6 +1,6 @@
 # Hansung E-class Auto Runner (PC Edition)
 
-한성대학교 e-class(유비온 기반) 자동 수강 도구입니다. 이 버전은 **맥북(macOS) 및 Windows 로컬 PC 환경**에서 직접 브라우저를 띄워(visible mode) 안정적으로 출석을 완료하는 데 최적화되어 있습니다.
+한성대학교 e-class(유비온 기반) 자동 수강 도구입니다. 이 버전은 **맥북(macOS) 및 Windows 로컬 PC 환경**에서 직접 브라우저를 띄워(visible mode) 안정적으로 출석을 완료하는 데 최적화되어 있습니다. **수강 중인 e-class 과목을 전부 순회하면서, 해당 주차에 아직 출석 처리되지 않은 영상을 자동으로 찾아 수강**하도록 설계되어 있습니다.
 
 ## 주요 특징 및 안정성
 
@@ -9,7 +9,7 @@
 - **JWPlayer 자동화:** 유비온 플레이어(JWPlayer)를 인식하여 팝업 열기 → 재생 유도 → seek → 종료 클릭 흐름을 자동화합니다.
 - **주차 자동 감지:** 과목 페이지의 상위 DOM 문맥과 제목 패턴(`4주차`, `Lecture4`, `4장)`, `실습 4)` 등)을 함께 사용해 현재 주차를 추론합니다.
 - **출석 판정 개선:** 제목 주변 문자열이 아니라 **진도현황(attendance table)** 의 `data-target` 주차값을 기준으로 해당 주차가 `출석/결석/-` 상태인지 확인합니다.
-- **다중 과목 처리:** 수강 중인 모든 과목을 순회하며, **현재 열려 있는 주차만** 선별해 처리합니다.
+- **다중 과목 처리:** 수강 중인 모든 과목을 순회하며, **현재 열려 있고 아직 출석 처리되지 않은 주차만** 선별해 처리합니다.
 - **가독성 좋은 최종 요약:** 실행 종료 후 과목별 최종 결과를 한눈에 볼 수 있는 출석 대시보드 로그를 출력합니다.
 
 ## 빠른 시작
@@ -28,11 +28,14 @@ python3 eclass_pc_runner.py
 
 ```powershell
 python -m venv .venv
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 playwright install chromium
 python eclass_pc_runner.py
 ```
+
+> PowerShell에서 venv 활성화가 권한 문제로 막히면 `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` 를 먼저 한 번 실행하면 됩니다. 현재 세션에만 적용됩니다.
 
 ## 환경 변수 설정
 
@@ -48,12 +51,14 @@ HANSUNG_INFO_PASSWORD=your_password
 실행 중에는 다음 로그를 중심으로 보면 됩니다.
 
 - `Module candidate | week=...` → 모듈/주차 파싱 결과
-- `Selected module | week=...` → 현재 날짜 기준으로 실제 선택된 주차
-- `Attendance probe | week=...` → 진도현황 표 기반 출석 판정 결과
+- `Selected module | week=...` → 실제 수강 대상으로 선택된 주차
+- `Attendance table | week=...` → 진도현황 표 기준 출석 상태 읽기
+- `Attendance probe | week=... | status=...` → 특정 모듈의 주차 상태 판정
 - `[SKIP][ATTENDED]` → 이미 출석 처리된 주차라 스킵
 - `[SUCCESS][ATTENDED]` → 재생 후 출석 반영 확인
 - `[FAIL][UNRESOLVED]` → 재생했지만 출석 반영이 확인되지 않음
-- 마지막 `FINAL ATTENDANCE DASHBOARD` → 과목별 최종 결과 요약
+- `🏁 COURSE END | 과목명 | ✅/❌` → 과목 단위 결과
+- `🎯 FINAL ATTENDANCE DASHBOARD` → 전체 과목 최종 요약
 
 ## 주의 사항
 
