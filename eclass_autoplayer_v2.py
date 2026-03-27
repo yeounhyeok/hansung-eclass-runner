@@ -641,13 +641,28 @@ def main():
                 })
                 # finished modules for this course
 
-            logging.info('========== FINAL COURSE SUMMARY ==========' )
+            logging.info('========== FINAL ATTENDANCE DASHBOARD ==========' )
+            logging.info('과목명 | 성공 | 실패 | 상세')
+            logging.info('-' * 100)
             for summary in course_summaries:
-                logging.info('[FINAL][COURSE] %s | success=%d | failed=%d', summary['course'], len(summary['success']), len(summary['failed']))
+                success_count = len(summary['success'])
+                failed_count = len(summary['failed'])
+                detail_parts = []
                 for item in summary['success']:
-                    logging.info('  [FINAL][OK] week=%s | title=%s | status=%s', item['week'], item['title'], item['status'])
+                    week = item.get('week')
+                    status = item.get('status')
+                    if week is not None:
+                        detail_parts.append(f'W{week}:출석({status})')
+                    else:
+                        detail_parts.append(f'{item.get("title")}:출석({status})')
                 for item in summary['failed']:
-                    logging.warning('  [FINAL][NO] week=%s | title=%s', item['week'], item['title'])
+                    week = item.get('week')
+                    if week is not None:
+                        detail_parts.append(f'W{week}:미반영')
+                    else:
+                        detail_parts.append(f'{item.get("title")}:미반영')
+                detail = ', '.join(detail_parts) if detail_parts else '해당 없음'
+                logging.info('%s | %d | %d | %s', summary['course'], success_count, failed_count, detail)
 
             if unresolved_modules:
                 logging.warning('========== FINAL UNRESOLVED MODULES ==========' )
