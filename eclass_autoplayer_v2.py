@@ -562,7 +562,12 @@ def main():
 
             overall_ok = True
             unresolved_modules = []
+            course_summaries = []
             for course in courses:
+                course_name = course.get('title') or course['href']
+                course_success = []
+                course_failed = []
+                logging.info('========== COURSE START | %s ==========', course_name)
                 logging.info('Processing course %s', course['href'])
                 page.goto(course['href'])
                 page.wait_for_load_state('networkidle')
@@ -583,8 +588,9 @@ def main():
                     if m['href'] in completed_modules:
                         continue
                     if is_module_marked_attended(page, m):
-                        logging.info('Skipping already attended module | week=%s | title=%s', m.get('week_label'), m.get('title'))
+                        logging.info('[SKIP][ATTENDED] week=%s | title=%s', m.get('week_label'), m.get('title'))
                         completed_modules.add(m['href'])
+                        course_success.append({'week': m.get('week_label'), 'title': m.get('title'), 'status': 'already_attended'})
                         continue
                     completed_modules.add(m['href'])
                     logging.info('Visiting module %s', m['href'])
@@ -606,11 +612,13 @@ def main():
                     page.goto(course['href'])
                     page.wait_for_load_state('networkidle')
                     if is_module_marked_attended(page, m):
-                        logging.info('Module now marked 출석 | week=%s | title=%s', m.get('week_label'), m.get('title'))
+                        logging.info('[SUCCESS][ATTENDED] week=%s | title=%s', m.get('week_label'), m.get('title'))
+                        course_success.append({'week': m.get('week_label'), 'title': m.get('title'), 'status': 'attended'})
                         time.sleep(2)
                         continue
 
-                    logging.info('Module still not marked 출석 | week=%s | title=%s', m.get('week_label'), m.get('title'))
+                    logging.warning('[FAIL][UNRESOLVED] week=%s | title=%s', m.get('week_label'), m.get('title'))
+                    course_failed.append({'week': m.get('week_label'), 'title': m.get('title')})
                     overall_ok = False
                     unresolved_modules.append({
                         'course': course.get('title') or course.get('href'),
@@ -618,10 +626,31 @@ def main():
                         'title': m.get('title'),
                         'href': m.get('href'),
                     })
+                logging.info('========== COURSE END | %s ==========', course_name)
+                logging.info('[COURSE SUMMARY] %s | success=%d | failed=%d', course_name, len(course_success), len(course_failed))
+                if course_success:
+                    for item in course_success:
+                        logging.info('  [OK] week=%s | title=%s | status=%s', item['week'], item['title'], item['status'])
+                if course_failed:
+                    for item in course_failed:
+                        logging.warning('  [NO] week=%s | title=%s', item['week'], item['title'])
+                course_summaries.append({
+                    'course': course_name,
+                    'success': course_success,
+                    'failed': course_failed,
+                })
                 # finished modules for this course
 
+            logging.info('========== FINAL COURSE SUMMARY ==========' )
+            for summary in course_summaries:
+                logging.info('[FINAL][COURSE] %s | success=%d | failed=%d', summary['course'], len(summary['success']), len(summary['failed']))
+                for item in summary['success']:
+                    logging.info('  [FINAL][OK] week=%s | title=%s | status=%s', item['week'], item['title'], item['status'])
+                for item in summary['failed']:
+                    logging.warning('  [FINAL][NO] week=%s | title=%s', item['week'], item['title'])
+
             if unresolved_modules:
-                logging.warning('=== FINAL UNRESOLVED MODULES (played but still not marked 출석) ===')
+                logging.warning('========== FINAL UNRESOLVED MODULES ==========' )
                 for item in unresolved_modules:
                     logging.warning('Unresolved | course=%s | week=%s | title=%s | href=%s', item['course'], item['week'], item['title'], item['href'])
             else:
