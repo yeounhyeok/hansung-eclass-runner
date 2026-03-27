@@ -113,8 +113,22 @@ def find_courses_from_ubion(page):
 
 
 def parse_week_label(text):
-    m = re.search(r'(\d+)주차', text)
-    return int(m.group(1)) if m else None
+    patterns = [
+        r'(\d+)주차',
+        r'Lecture\s*(\d+)',
+        r'\[Lecture\s*(\d+)\]',
+        r'(\d+)장\)',
+        r'실습\s*(\d+)\)',
+        r'(\d+)차시',
+    ]
+    for pattern in patterns:
+        m = re.search(pattern, text, re.IGNORECASE)
+        if m:
+            try:
+                return int(m.group(1))
+            except Exception:
+                continue
+    return None
 
 
 def find_video_modules_from_course_html(html):
@@ -133,14 +147,27 @@ def find_video_modules_from_course_html(html):
             surrounding = ' '
             week_label = None
             try:
-                li = a.find_parent(['li', 'div'])
-                if li:
-                    surrounding = li.get_text(separator=' ', strip=True)
-                else:
+                context_parts = []
+                for ancestor in a.parents:
+                    if getattr(ancestor, 'name', None) not in ['li', 'div', 'section', 'ul', 'article']:
+                        continue
+                    text_blob = ancestor.get_text(separator=' ', strip=True)
+                    if text_blob and len(text_blob) < 3000:
+                        context_parts.append(text_blob)
+                    guessed = parse_week_label(text_blob or '')
+                    if guessed is not None:
+                        week_label = guessed
+                        surrounding = text_blob
+                        break
+                if not surrounding.strip():
                     surrounding = a.parent.get_text(separator=' ', strip=True)
             except Exception:
                 surrounding = a.get_text()
-            week_label = parse_week_label(surrounding)
+
+            if week_label is None:
+                week_label = parse_week_label(title)
+                if week_label is not None:
+                    surrounding = f'{title} {surrounding}'
             modules.append({
                 'title': title,
                 'href': full,
