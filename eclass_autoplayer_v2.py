@@ -397,9 +397,30 @@ def click_end_modal(page):
 
 def is_module_marked_attended(page, module):
     try:
+        week = module.get('week_label')
+        if week is not None:
+            selectors = [
+                f'li.attendance_section p.sname[data-target="{week}"]',
+                f'ul.attendance li.attendance_section p.sname[data-target="{week}"]',
+            ]
+            for selector in selectors:
+                try:
+                    el = page.query_selector(selector)
+                    if not el:
+                        continue
+                    parent = el.evaluate_handle('node => node.parentElement')
+                    text = parent.inner_text().strip() if parent else ''
+                    klass = parent.get_attribute('class') if parent else ''
+                    logging.info('Attendance probe | week=%s | class=%s | text=%s', week, klass, text)
+                    if '출석' in text:
+                        return True
+                    if '결석' in text or '-' in text:
+                        return False
+                except Exception:
+                    continue
+
         body = page.inner_text('body')
         title = (module.get('title') or '').strip()
-        week = module.get('week_label')
 
         if title and title in body:
             title_idx = body.find(title)
@@ -408,26 +429,6 @@ def is_module_marked_attended(page, module):
                 return False
             if '출석' in snippet:
                 return True
-
-        context = module.get('context') or ''
-        if context:
-            compact = ' '.join(context.split())[:120]
-            ctx_idx = body.find(compact) if compact else -1
-            if ctx_idx >= 0:
-                snippet = body[max(0, ctx_idx - 120): ctx_idx + 240]
-                if '결석' in snippet:
-                    return False
-                if '출석' in snippet:
-                    return True
-
-        if week is not None:
-            m = re.search(rf'{week}주차(.{{0,200}})', body, re.DOTALL)
-            if m:
-                snippet = m.group(0)
-                if '결석' in snippet:
-                    return False
-                if '출석' in snippet:
-                    return True
     except Exception:
         pass
     return False
