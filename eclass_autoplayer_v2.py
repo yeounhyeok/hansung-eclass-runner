@@ -112,6 +112,11 @@ def find_courses_from_ubion(page):
     return courses
 
 
+def parse_week_label(text):
+    m = re.search(r'(\d+)주차', text)
+    return int(m.group(1)) if m else None
+
+
 def find_video_modules_from_course_html(html):
     soup = BeautifulSoup(html, 'html.parser')
     modules = []
@@ -125,16 +130,22 @@ def find_video_modules_from_course_html(html):
                 logging.info('Skipping Ethics Guideline module: %s', title)
                 continue
             full = href if href.startswith('http') else 'https://learn.hansung.ac.kr' + href
-            parent = a.parent
             surrounding = ' '
+            week_label = None
             try:
-                surrounding = parent.get_text(separator=' ', strip=True)
+                li = a.find_parent(['li', 'div'])
+                if li:
+                    surrounding = li.get_text(separator=' ', strip=True)
+                else:
+                    surrounding = a.parent.get_text(separator=' ', strip=True)
             except Exception:
                 surrounding = a.get_text()
+            week_label = parse_week_label(surrounding)
             modules.append({
                 'title': title,
                 'href': full,
                 'context': surrounding,
+                'week_label': week_label,
                 'player_type': 'jwplayer',
                 'has_iframe': True,
                 'notes': 'JWPlayer-based VOD module'
@@ -290,14 +301,14 @@ def attempt_play_video(page, max_wait, logdir: Path):
                                     f.evaluate('(dur) => { try { jwplayer().seek(dur - 2); } catch(e) {} }', info['duration'])
                                     info['_human_key_seek_done'] = True
                                 
-                                # Step 3: Watch UNTIL ACTUAL END and then CLICK EXIT COORDINATES
-                                if info['duration'] > 0 and (info['watched_seconds'] + 1 >= info['duration']):
-                                    logging.info('DEBUG: Video reached end. Performing HUMAN-LIKE EXIT CLICK (TOP-RIGHT)...')
-                                    # Search for "종료" or "학습종료" button specifically
+                                # Step 3: DEBUG MODE — watch 10 seconds after seek, then click exit
+                                if not info.get('_debug_exit_start') and info.get('_human_key_seek_done'):
+                                    info['_debug_exit_start'] = time.time()
+
+                                if info.get('_debug_exit_start') and (time.time() - info['_debug_exit_start'] >= 10):
+                                    logging.info('DEBUG: 10s watched after seek. Performing HUMAN-LIKE EXIT CLICK (TOP-RIGHT)...')
                                     try:
-                                        # Force click TOP-RIGHT area (Hansung Ubion standard X button location)
                                         viewport = popup.viewport_size or {'width': 1280, 'height': 800}
-                                        # Click near top-right corner (approx 30-50px from edges)
                                         tx, ty = viewport['width'] - 40, 40
                                         logging.info(f'Clicking TOP-RIGHT exit button: ({tx}, {ty})')
                                         popup.mouse.click(tx, ty)
@@ -514,9 +525,15 @@ def main():
                 html = page.content()
                 modules = find_video_modules_from_course_html(html)
                 logging.info('Found %d video modules', len(modules))
+                for m in modules:
+                    rng = parse_date_range_from_text(m.get('context', ''))
+                    logging.info('Module candidate | week=%s | title=%s | range=%s', m.get('week_label'), m.get('title'), rng)
                 # filter by availability window
                 available = [m for m in modules if in_availability_window(m.get('context',''))]
                 logging.info('%d modules within availability window', len(available))
+                for m in available:
+                    rng = parse_date_range_from_text(m.get('context', ''))
+                    logging.info('Selected module | week=%s | title=%s | range=%s', m.get('week_label'), m.get('title'), rng)
                 completed_modules = set()
                 for m in available:
                     if m['href'] in completed_modules:
