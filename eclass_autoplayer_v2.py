@@ -301,12 +301,9 @@ def attempt_play_video(page, max_wait, logdir: Path):
                                     f.evaluate('(dur) => { try { jwplayer().seek(dur - 2); } catch(e) {} }', info['duration'])
                                     info['_human_key_seek_done'] = True
                                 
-                                # Step 3: DEBUG MODE — watch 10 seconds after seek, then click exit
-                                if not info.get('_debug_exit_start') and info.get('_human_key_seek_done'):
-                                    info['_debug_exit_start'] = time.time()
-
-                                if info.get('_debug_exit_start') and (time.time() - info['_debug_exit_start'] >= 10):
-                                    logging.info('DEBUG: 10s watched after seek. Performing HUMAN-LIKE EXIT CLICK (TOP-RIGHT)...')
+                                # Step 3: Watch UNTIL ACTUAL END and then CLICK EXIT COORDINATES
+                                if info['duration'] > 0 and (info['watched_seconds'] + 1 >= info['duration']):
+                                    logging.info('DEBUG: Video reached end. Performing HUMAN-LIKE EXIT CLICK (TOP-RIGHT)...')
                                     try:
                                         viewport = popup.viewport_size or {'width': 1280, 'height': 800}
                                         tx, ty = viewport['width'] - 40, 40
@@ -407,13 +404,42 @@ def click_end_modal(page):
     return False
 
 
-def attendance_count_from_course_page(page):
+def is_module_marked_attended(page, module):
     try:
-        txt = page.inner_text('body')
-        # count occurrences of '출석' in the course page
-        return txt.count('출석')
+        body = page.inner_text('body')
+        title = (module.get('title') or '').strip()
+        week = module.get('week_label')
+
+        if title and title in body:
+            title_idx = body.find(title)
+            snippet = body[max(0, title_idx - 120): title_idx + 240]
+            if '결석' in snippet:
+                return False
+            if '출석' in snippet:
+                return True
+
+        context = module.get('context') or ''
+        if context:
+            compact = ' '.join(context.split())[:120]
+            ctx_idx = body.find(compact) if compact else -1
+            if ctx_idx >= 0:
+                snippet = body[max(0, ctx_idx - 120): ctx_idx + 240]
+                if '결석' in snippet:
+                    return False
+                if '출석' in snippet:
+                    return True
+
+        if week is not None:
+            m = re.search(rf'{week}주차(.{{0,200}})', body, re.DOTALL)
+            if m:
+                snippet = m.group(0)
+                if '결석' in snippet:
+                    return False
+                if '출석' in snippet:
+                    return True
     except Exception:
-        return 0
+        pass
+    return False
 
 
 def parse_attendance_window_from_context(context_text):
@@ -516,12 +542,11 @@ def main():
                 courses = courses[:args.limit_courses]
 
             overall_ok = True
+            unresolved_modules = []
             for course in courses:
                 logging.info('Processing course %s', course['href'])
                 page.goto(course['href'])
                 page.wait_for_load_state('networkidle')
-                before_att = attendance_count_from_course_page(page)
-                logging.info('Attendance count before: %d', before_att)
                 html = page.content()
                 modules = find_video_modules_from_course_html(html)
                 logging.info('Found %d video modules', len(modules))
@@ -538,12 +563,15 @@ def main():
                 for m in available:
                     if m['href'] in completed_modules:
                         continue
+                    if is_module_marked_attended(page, m):
+                        logging.info('Skipping already attended module | week=%s | title=%s', m.get('week_label'), m.get('title'))
+                        completed_modules.add(m['href'])
+                        continue
                     completed_modules.add(m['href'])
                     logging.info('Visiting module %s', m['href'])
                     page.goto(m['href'])
                     page.wait_for_load_state('networkidle')
                     
-                    # Force diagnostics and stop immediately if debug_first
                     dump_frame_diagnostics(page)
                     
                     if args.debug_first:
@@ -558,22 +586,28 @@ def main():
 
                     page.goto(course['href'])
                     page.wait_for_load_state('networkidle')
-                    after_att = attendance_count_from_course_page(page)
-                    logging.info('Attendance after: %d', after_att)
-                    if same_attendance_checkpoint(before_att, after_att):
-                        logging.info('Attendance increment detected')
-                        before_att = after_att
+                    if is_module_marked_attended(page, m):
+                        logging.info('Module now marked 출석 | week=%s | title=%s', m.get('week_label'), m.get('title'))
                         time.sleep(2)
                         continue
 
-                    logging.info('No attendance increment; scheduling retry')
+                    logging.info('Module still not marked 출석 | week=%s | title=%s', m.get('week_label'), m.get('title'))
                     overall_ok = False
-                    if args.cron_auto:
-                        run_dt = datetime.now(KST) + timedelta(minutes=3)
-                        marker = f'eclass_retry_{int(time.time())}'
-                        cmd = f'python3 {shlex.quote(str(Path(__file__).resolve()))} --resume-course {shlex.quote(m["href"])} --headless'
-                        add_cron_job(cmd, run_dt, marker)
+                    unresolved_modules.append({
+                        'course': course.get('title') or course.get('href'),
+                        'week': m.get('week_label'),
+                        'title': m.get('title'),
+                        'href': m.get('href'),
+                    })
                 # finished modules for this course
+
+            if unresolved_modules:
+                logging.warning('=== FINAL UNRESOLVED MODULES (played but still not marked 출석) ===')
+                for item in unresolved_modules:
+                    logging.warning('Unresolved | course=%s | week=%s | title=%s | href=%s', item['course'], item['week'], item['title'], item['href'])
+            else:
+                logging.info('All processed modules are marked 출석.')
+
             # if overall_ok then remove any eclass_retry markers
             if args.cron_auto and overall_ok:
                 try:
