@@ -12,23 +12,32 @@
 
 ## 시작하기
 
-### 1. 환경 설정
+### 1. 가상환경 생성 및 활성화
 
-`.env` 파일을 생성하고 아래 정보를 입력합니다.
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+macOS / zsh 기준입니다. bash도 동일하게 `source .venv/bin/activate`를 사용하면 됩니다.
+
+### 2. 환경 변수 설정
+
+프로젝트 루트에 `.env` 파일을 생성하고 아래 정보를 입력합니다.
 
 ```env
 HANSUNG_INFO_ID=your_id
 HANSUNG_INFO_PASSWORD=your_password
 ```
 
-### 2. 패키지 설치
+### 3. 패키지 설치
 
 ```bash
 pip install -r requirements.txt
 playwright install chromium
 ```
 
-### 3. 실행
+### 4. 실행
 
 ```bash
 python3 eclass_pc_runner.py
