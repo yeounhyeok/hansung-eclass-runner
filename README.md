@@ -59,23 +59,23 @@ playwright install chromium
 열린 파일에 아래처럼 입력하고 저장하세요.
 
 ```env
-HANSUNG_INFO_ID=2024xxxx
-HANSUNG_INFO_PASSWORD=your_password
+HANSUNG_INFO_ID=학번
+HANSUNG_INFO_PASSWORD=비밀번호
 ```
 
 파일 없이 현재 세션에서만 바로 넣고 실행해도 됩니다.
 
 **macOS / Linux**
 ```bash
-export HANSUNG_INFO_ID=2024xxxx
-export HANSUNG_INFO_PASSWORD='your_password'
+export HANSUNG_INFO_ID=학번
+export HANSUNG_INFO_PASSWORD=비밀번호
 python3 eclass_pc_runner.py
 ```
 
 **Windows (PowerShell)**
 ```powershell
-$env:HANSUNG_INFO_ID="2024xxxx"
-$env:HANSUNG_INFO_PASSWORD="your_password"
+$env:HANSUNG_INFO_ID=학번
+$env:HANSUNG_INFO_PASSWORD=비밀번호
 python eclass_pc_runner.py
 ```
 
