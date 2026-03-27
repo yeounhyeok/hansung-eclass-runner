@@ -217,44 +217,35 @@ def attempt_play_video(page, max_wait, logdir: Path):
             logging.warning('No popup appeared after clicking "동영상 보기"')
             return info
 
-        # NEW: Check for "수강 기록이 있습니다. 이어서 보시겠습니까?" modal in popup
+        # Fast popup focus / resume handling (~2s target)
         try:
-            popup.wait_for_load_state('load', timeout=10000)
+            popup.wait_for_load_state('domcontentloaded', timeout=3000)
+        except Exception:
+            pass
+
+        try:
+            popup.bring_to_front()
+            logging.info('Popup focused (bring_to_front)')
+        except Exception:
+            pass
+
+        try:
             resume_btn = popup.query_selector('button:has-text("예"), button:has-text("확인"), .modal-footer button.btn-primary')
             if resume_btn:
                 logging.info('Detected "Resume playback" modal in popup, clicking YES/OK')
                 resume_btn.click()
-                time.sleep(2)
-        except Exception:
-            pass
-
-        # Wait for popup to settle and focus it
-        try:
-            popup.wait_for_load_state('load', timeout=15000)
-            popup.bring_to_front()
-            logging.info('Popup focused (bring_to_front)')
-            
-            # Additional check for resume modal in popup with retry
-            for _ in range(5):
-                resume_btn = popup.query_selector('button:has-text("예"), button:has-text("확인"), .modal-footer button.btn-primary')
-                if resume_btn:
-                    logging.info('Detected "Resume playback" modal in popup, clicking YES/OK')
-                    resume_btn.click()
-                    time.sleep(2)
-                    break
-                time.sleep(2)
+                time.sleep(0.4)
         except Exception:
             pass
         
         # Human-like interaction: Click center of popup to trigger play
         try:
-            # Wait for some content to ensure it's ready for clicks
-            popup.wait_for_timeout(1200)
+            popup.wait_for_timeout(300)
             viewport = popup.viewport_size or {'width': 1280, 'height': 800}
             cx, cy = viewport['width'] // 2, viewport['height'] // 2
             logging.info('Simulating human click at center (%d, %d) to trigger playback', cx, cy)
             popup.mouse.click(cx, cy)
-            time.sleep(2)
+            time.sleep(0.3)
         except Exception as e:
             logging.warning('Center click failed: %s', e)
 
