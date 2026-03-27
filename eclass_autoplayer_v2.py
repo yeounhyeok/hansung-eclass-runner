@@ -119,7 +119,6 @@ def parse_week_label(text):
         r'\[Lecture\s*(\d+)\]',
         r'(\d+)장\)',
         r'실습\s*(\d+)\)',
-        r'(\d+)차시',
     ]
     for pattern in patterns:
         m = re.search(pattern, text, re.IGNORECASE)
@@ -422,40 +421,44 @@ def click_end_modal(page):
     return False
 
 
-def is_module_marked_attended(page, module):
+def read_attendance_status_by_week(page):
+    result = {}
     try:
+        items = page.query_selector_all('ul.attendance li.attendance_section')
+        for item in items:
+            try:
+                week_el = item.query_selector('p.sname')
+                if not week_el:
+                    continue
+                week_raw = week_el.inner_text().strip()
+                week = int(week_raw)
+                text = item.inner_text().strip()
+                klass = item.get_attribute('class') or ''
+                logging.info('Attendance table | week=%s | class=%s | text=%s', week, klass, text)
+                if '출석' in text:
+                    result[week] = '출석'
+                elif '결석' in text:
+                    result[week] = '결석'
+                elif '-' in text:
+                    result[week] = '-'
+                else:
+                    result[week] = 'unknown'
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return result
+
+
+def is_module_marked_attended(page, module, attendance_map=None):
+    try:
+        if attendance_map is None:
+            attendance_map = read_attendance_status_by_week(page)
         week = module.get('week_label')
         if week is not None:
-            selectors = [
-                f'li.attendance_section p.sname[data-target="{week}"]',
-                f'ul.attendance li.attendance_section p.sname[data-target="{week}"]',
-            ]
-            for selector in selectors:
-                try:
-                    el = page.query_selector(selector)
-                    if not el:
-                        continue
-                    parent = el.evaluate_handle('node => node.parentElement')
-                    text = parent.inner_text().strip() if parent else ''
-                    klass = parent.get_attribute('class') if parent else ''
-                    logging.info('Attendance probe | week=%s | class=%s | text=%s', week, klass, text)
-                    if '출석' in text:
-                        return True
-                    if '결석' in text or '-' in text:
-                        return False
-                except Exception:
-                    continue
-
-        body = page.inner_text('body')
-        title = (module.get('title') or '').strip()
-
-        if title and title in body:
-            title_idx = body.find(title)
-            snippet = body[max(0, title_idx - 120): title_idx + 240]
-            if '결석' in snippet:
-                return False
-            if '출석' in snippet:
-                return True
+            status = attendance_map.get(week, 'unknown')
+            logging.info('Attendance probe | week=%s | status=%s | title=%s', week, status, module.get('title'))
+            return status == '출석'
     except Exception:
         pass
     return False
@@ -572,6 +575,7 @@ def main():
                 page.goto(course['href'])
                 page.wait_for_load_state('networkidle')
                 html = page.content()
+                attendance_map = read_attendance_status_by_week(page)
                 modules = find_video_modules_from_course_html(html)
                 logging.info('Found %d video modules', len(modules))
                 for m in modules:
@@ -587,7 +591,7 @@ def main():
                 for m in available:
                     if m['href'] in completed_modules:
                         continue
-                    if is_module_marked_attended(page, m):
+                    if is_module_marked_attended(page, m, attendance_map):
                         logging.info('[SKIP][ATTENDED] week=%s | title=%s', m.get('week_label'), m.get('title'))
                         completed_modules.add(m['href'])
                         course_success.append({'week': m.get('week_label'), 'title': m.get('title'), 'status': 'already_attended'})
@@ -611,7 +615,8 @@ def main():
 
                     page.goto(course['href'])
                     page.wait_for_load_state('networkidle')
-                    if is_module_marked_attended(page, m):
+                    attendance_map = read_attendance_status_by_week(page)
+                    if is_module_marked_attended(page, m, attendance_map):
                         logging.info('[SUCCESS][ATTENDED] week=%s | title=%s', m.get('week_label'), m.get('title'))
                         course_success.append({'week': m.get('week_label'), 'title': m.get('title'), 'status': 'attended'})
                         time.sleep(2)
